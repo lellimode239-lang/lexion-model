@@ -68,7 +68,7 @@ HEAVY_ASK_SEM = threading.BoundedSemaphore(HEAVY_ASK_LIMIT)
 # NLM_RAW_MODE=1  -> LEXION Render: kazus matni o'zgarishsiz yuboriladi (prompt daftarning chat sozlamasida turadi),
 # javob tozalanmasdan qaytadi (toza JSON massiv), har savol yangi suhbatda beriladi (eski kazuslar aralashmasin).
 RAW_MODE = os.environ.get("NLM_RAW_MODE", "").strip() == "1"
-LEX_URL_RE = re.compile(r"https?://(?:www\.)?lex\.uz/docs/[A-Za-z0-9_-]+")
+LEX_URL_RE = re.compile(r"https?://(?:www\.)?lex\.uz/docs/-?\d+(?![\w-])")   # to'liq raqamli ID; kesilgan (docs/-) havola o'tmaydi
 MAX_LEX_URLS = 15
 LEXION_WRAPPER = (
     "VAZIFA: quyidagi MATN qaysi huquqiy mavzuga tegishli bo'lsa, shu mavzu uchun kerakli qonun hujjatlarining "
@@ -315,6 +315,7 @@ def clean_answer(raw: str, custom: bool = False) -> str:
     txt = re.sub(r"^Answer:\s*", "", txt).strip()
     if RAW_MODE:
         # Faqat katalog URL'lari qoladi. Boshqa har qanday matn (manba, daftar, tizim haqida gap) tashlab yuboriladi.
+        print(f"[lexion raw] {txt[:600]!r}", flush=True)   # diagnostika: daftardan kelgan xom javob (faqat serverda)
         urls = list(dict.fromkeys(LEX_URL_RE.findall(txt)))[:MAX_LEX_URLS]
         return json.dumps(urls, ensure_ascii=False, separators=(",", ":"))
     if is_refusal(txt):
