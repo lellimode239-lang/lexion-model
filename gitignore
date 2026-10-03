@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+nlm-env/
+.env
+.notebooklm/
+master_token.json
+storage_state.json
+*.b64
+.DS_Store
