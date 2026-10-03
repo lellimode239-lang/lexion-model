@@ -316,7 +316,9 @@ def clean_answer(raw: str, custom: bool = False) -> str:
     if RAW_MODE:
         # Faqat katalog URL'lari qoladi. Boshqa har qanday matn (manba, daftar, tizim haqida gap) tashlab yuboriladi.
         print(f"[lexion raw] {txt[:600]!r}", flush=True)   # diagnostika: daftardan kelgan xom javob (faqat serverda)
-        urls = list(dict.fromkeys(LEX_URL_RE.findall(txt)))[:MAX_LEX_URLS]
+        m = re.search(r"\[.*\]", txt, re.S)                 # JSON massiv qismi ("New conversation: ..." qatori tashlanadi)
+        seg = re.sub(r"\s+", "", m.group(0) if m else txt)    # CLI uzun havolani qator uzilishi bilan sindirishi mumkin
+        urls = list(dict.fromkeys(LEX_URL_RE.findall(seg)))[:MAX_LEX_URLS]
         return json.dumps(urls, ensure_ascii=False, separators=(",", ":"))
     if is_refusal(txt):
         raise NoBasisError(NO_BASIS_MSG_SOURCES if custom else NO_BASIS_MSG_GENERAL,
