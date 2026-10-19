@@ -192,14 +192,19 @@ def ensure_session(profile: str, force: bool = False) -> bool:
         return os.path.exists(path)
 
 
-def nlm(profile: str, *args: str, timeout: int = 300, stdin: Optional[str] = None,
-        backend: Optional[str] = None, _retried: bool = False) -> str:
-    """notebooklm CLI'ni bitta akkaunt (profil) nomidan chaqiradi. Chaqiruvlar orasida pauza qo'yadi."""
+def _gap(profile: str) -> None:
+    """Bir akkauntning ketma-ket chaqiruvlari orasida MIN_GAP_SEC pauza."""
     with GAP_LOCKS[profile]:
         wait = MIN_GAP_SEC - (time.time() - LAST_CALL[profile])
         if wait > 0:
             time.sleep(wait)
         LAST_CALL[profile] = time.time()
+
+
+def nlm(profile: str, *args: str, timeout: int = 300, stdin: Optional[str] = None,
+        backend: Optional[str] = None, _retried: bool = False) -> str:
+    """notebooklm CLI'ni bitta akkaunt (profil) nomidan chaqiradi. Chaqiruvlar orasida pauza qo'yadi."""
+    _gap(profile)
     try:
         cmd = [NLM, "-p", profile] + (["--backend", backend] if backend else []) + list(args)
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=stdin)
@@ -214,6 +219,88 @@ def nlm(profile: str, *args: str, timeout: int = 300, stdin: Optional[str] = Non
             raise AuthError(msg)
         raise NlmError(msg)
     return r.stdout.strip()
+
+
+# ── Python API (CLI o'rniga) ──
+# O'lchov (bir xil katalog, bir xil savol): CLI 36-55 s, Python API 14-28 s. CLI uzun URL'ni qatorga bo'lib
+# buzardi (docs/\n6257288), API javobni butun qaytaradi. NLM_PY_API=0 -> eski CLI yo'li.
+PY_API = os.environ.get("NLM_PY_API", "1").strip() != "0"
+_API_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_API_LOOP_LOCK = threading.Lock()
+_API_CLIENTS: dict = {}   # (profil, backend) -> Future[(kontekst, client)]; faqat _API_LOOP ichida o'zgartiriladi
+
+
+def _api_loop() -> asyncio.AbstractEventLoop:
+    """Barcha profil klientlari uchun bitta fon event loop (klient o'zi yaratilgan loop'ga bog'langan)."""
+    global _API_LOOP
+    with _API_LOOP_LOCK:
+        if _API_LOOP is None:
+            _API_LOOP = asyncio.new_event_loop()
+            threading.Thread(target=_API_LOOP.run_forever, daemon=True, name="nlm-api").start()
+    return _API_LOOP
+
+
+async def _open_client(p: str, backend: Optional[str]):
+    from notebooklm import NotebookLMClient
+    ctx = NotebookLMClient.from_storage(profile=p, backend=backend)
+    return ctx, await ctx.__aenter__()
+
+
+async def _api_client(p: str, backend: Optional[str]):
+    key = (p, backend)
+    fut = _API_CLIENTS.get(key)
+    if fut is None:   # bir vaqtda kelgan chaqiruvlar bitta klientni kutadi (ikki marta ochilmaydi)
+        fut = _API_CLIENTS[key] = asyncio.ensure_future(_open_client(p, backend))
+    try:
+        return (await asyncio.shield(fut))[1]
+    except Exception:
+        _API_CLIENTS.pop(key, None)
+        raise
+
+
+async def _api_drop(p: str, backend: Optional[str]) -> None:
+    """Xatodan keyin klient yopiladi: keyingi chaqiruv cookie'ni diskdan yangidan o'qiydi (auth refresh'dan keyin ham)."""
+    fut = _API_CLIENTS.pop((p, backend), None)
+    if fut is not None and fut.done() and not fut.cancelled() and fut.exception() is None:
+        try:
+            await fut.result()[0].__aexit__(None, None, None)
+        except Exception:   # noqa: BLE001 -- yopishdagi xato muhim emas
+            pass
+
+
+def api(p: str, op, backend: Optional[str] = None, timeout: int = 300):
+    """op(client) korutinasini profil klienti bilan bajaradi. Kutubxona xatolari NlmError/AuthError'ga aylanadi."""
+    import concurrent.futures
+    _gap(p)
+
+    async def run():
+        client = await _api_client(p, backend)
+        try:
+            return await op(client)
+        except Exception:
+            await _api_drop(p, backend)
+            raise
+
+    fut = asyncio.run_coroutine_threadsafe(run(), _api_loop())
+    try:
+        return fut.result(timeout)
+    except concurrent.futures.TimeoutError:
+        fut.cancel()
+        raise NlmError("timeout: NotebookLM javob bermadi")
+    except Exception as e:
+        from notebooklm.exceptions import AuthError as LibAuthError
+        msg = f"{type(e).__name__}: {e}"[:500]
+        if isinstance(e, LibAuthError):
+            raise AuthError(msg) from e
+        raise NlmError(msg) from e
+
+
+def ask_umumiy(p: str, nid: str, prompt: str) -> str:
+    """Umumiy (katalog) daftarga savol. API'da conversation_id berilmasa yangi suhbat ochiladi (= CLI --new)."""
+    if PY_API:
+        return api(p, lambda c: c.chat.ask(nid, prompt), backend=ASK_BACKEND or None, timeout=420).answer
+    ask_args = ["ask", "--notebook", nid] + (["--new", "--yes"] if RAW_MODE else []) + [prompt]
+    return nlm(p, *ask_args, timeout=420, backend=ASK_BACKEND or None)
 
 
 def with_retry(fn, retries: Optional[int] = None):
@@ -522,11 +609,10 @@ def run_job(job: dict, acc: dict) -> dict:
             step("savol yuborilyapti (vaqtinchalik daftar)")
             raw = with_retry(lambda: nlm(p, "ask", "--notebook", nid, prompt, timeout=420))
         else:
-            ask_args = ["ask", "--notebook", nid] + (["--new", "--yes"] if RAW_MODE else []) + [prompt]
-            ask = lambda: nlm(p, *ask_args, timeout=420, backend=ASK_BACKEND or None)
+            ask = lambda: ask_umumiy(p, nid, prompt)
             # tartib muhim: avval akkaunt qulfi, keyin umumiy semafor (boshqa akkaunt ishi bekorga bloklanmasin)
             with UMUMIY_LOCKS[p]:   # umumiy chat: bir akkauntda bir vaqtda bitta savol
-                step(f"savol navbatda (umumiy daftar, backend={ASK_BACKEND or 'web'})")
+                step(f"savol navbatda (umumiy daftar, backend={ASK_BACKEND or 'web'}, {'api' if PY_API else 'cli'})")
                 with HEAVY_ASK_SEM:  # RAM himoyasi: server bo'yicha bir vaqtda HEAVY_ASK_LIMIT ta
                     step("savol yuborilyapti")
                     raw = with_retry(ask)
