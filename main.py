@@ -296,9 +296,17 @@ def api(p: str, op, backend: Optional[str] = None, timeout: int = 300):
 
 
 def ask_umumiy(p: str, nid: str, prompt: str) -> str:
-    """Umumiy (katalog) daftarga savol. API'da conversation_id berilmasa yangi suhbat ochiladi (= CLI --new)."""
+    """Umumiy (katalog) daftarga savol. RAW_MODE'da har savol toza suhbatda (= CLI `ask --new`)."""
     if PY_API:
-        return api(p, lambda c: c.chat.ask(nid, prompt), backend=ASK_BACKEND or None, timeout=420).answer
+        async def fresh_ask(c):
+            # API conversation_id'siz JORIY suhbatni davom ettiradi: oldingi 50 javob yangi tanlovga ta'sir qiladi
+            # (lex1 jinoyat savollariga bir xil 3 Plenumni qaytarib qolgan edi). CLI --new kabi avval o'chiramiz.
+            if RAW_MODE:
+                cid = await c.chat.get_conversation_id(nid)
+                if cid:
+                    await c.chat.delete_conversation(nid, cid)
+            return await c.chat.ask(nid, prompt)
+        return api(p, fresh_ask, backend=ASK_BACKEND or None, timeout=420).answer
     ask_args = ["ask", "--notebook", nid] + (["--new", "--yes"] if RAW_MODE else []) + [prompt]
     return nlm(p, *ask_args, timeout=420, backend=ASK_BACKEND or None)
 
