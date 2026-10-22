@@ -87,15 +87,23 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 # NLM_UMUMIY_RU -> ruscha savollar uchun ruscha katalog daftari (barcha akkauntlarga ulashilgan bitta ID); bo'sh = o'chiq
 UMUMIY_RU = os.environ.get("NLM_UMUMIY_RU", "").strip()
 UMUMIY_IDS = {a["umumiy"] for a in ACCOUNTS} | ({UMUMIY_RU} if UMUMIY_RU else set())
+# Ruscha savolni aniqlash: shubha bo'lsa — O'ZBEKCHA (o'zbekcha javob sifati hech qachon o'zgarmasin)
 UZ_CYR_RE = re.compile(r"[ўқғҳЎҚҒҲ]")
-RU_MARK_RE = re.compile(r"[ыщъЫЩЪ]|(?<![а-яё])(что|как|если|это|меня|мне|можно|нужно|ли|при|был|была|который|после|не|и|в|у|по|за|от|я|он|она|мы|они|его|её|их|мой|моя)(?![а-яё])|[а-яё](ть|ться|ся)(?![а-яё])", re.I)
+_W = r"(?<![а-яёa-z])(?:%s)(?![а-яёa-z])"
+RU_WORDS_RE = re.compile(_W % "что|как|если|это|меня|мне|можно|нужно|ли|не|и|в|на|с|по|за|от|я|он|она|мы|они|его|её|их|мой|моя|мою|был|была|были|при|после|который|которая|для|без|или|но|уже|чтобы|когда|почему|какой|какие|сколько|где|есть|нет|может|должен|ребенок|ребёнок|работодатель|договор|закон|статья|суд", re.I)
+UZ_WORDS_RE = re.compile(_W % "ва|билан|учун|нима|нега|кандай|канча|булади|болади|бўлади|керак|мумкин|эмас|бор|йук|мен|сен|биз|бу|шу|агар|лекин|аммо|ёки|деб|хам|булса|болса|килиш|килса|килади|килинади|беринг|айтиб|бер|мени|менга|сизга|нафар|ишдан|килай|борми|йукми|тугрисида|модда|моддаси|кодекси|конуни|ариза", re.I)
+RU_VERB_RE = re.compile(r"[а-яё]{3,}(?:ть|ться|ешь|ется|ются)(?![а-яё])", re.I)
+RU_ONLY_RE = re.compile(r"[ыщЫЩ]")   # o'zbek kirill alifbosida yo'q
 
 
 def is_russian(text: str) -> bool:
-    """Ruscha savol: kirill harflar ustun, o'zbek kirill harflari (ў қ ғ ҳ) yo'q va ruscha belgi/so'z bor."""
     letters = [c for c in text if c.isalpha()]
-    cyr = sum("\u0400" <= c <= "\u04ff" for c in letters)
-    return bool(letters) and cyr / len(letters) > 0.5 and not UZ_CYR_RE.search(text) and bool(RU_MARK_RE.search(text))
+    if not letters or UZ_CYR_RE.search(text):
+        return False
+    cyr = sum("Ѐ" <= c <= "ӿ" for c in letters)
+    if cyr / len(letters) <= 0.5 or UZ_WORDS_RE.search(text):
+        return False
+    return len(RU_WORDS_RE.findall(text)) + len(RU_VERB_RE.findall(text)) + 2 * len(RU_ONLY_RE.findall(text)) >= 2
 
 DEFAULT_PROMPT = (
     "Siz professional O'zbekiston huquqshunosisiz. "
