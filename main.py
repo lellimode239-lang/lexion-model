@@ -62,6 +62,8 @@ AUTH_REFRESH_HOURS = float(os.environ.get("NLM_AUTH_REFRESH_HOURS", "6"))  # 0 =
 # NLM_ASK_BACKEND=android  -> faqat umumiy daftar savoli android orqali (boshqa buyruqlar va vaqtinchalik daftarlar o'zgarmaydi).
 # Android xato bersa web'ga QAYTILMAYDI (web 512 MB'dan oshib, butun serverni o'chiradi).
 ASK_BACKEND = os.environ.get("NLM_ASK_BACKEND", "").strip().lower()      # "" = web (eski xulq)
+# Google ba'zan javob oqimini uzib, savolni ~3 daqiqa osiltiradi; normal javob 20-60 s — undan keyin boshqa akkauntga
+ASK_TIMEOUT_SEC = int(os.environ.get("LEXION_ASK_TIMEOUT", "150"))
 HEAVY_ASK_LIMIT = max(int(os.environ.get("HEAVY_ASK_LIMIT", "1")), 1)    # bir vaqtda nechta umumiy-daftar savoli (butun server bo'yicha)
 HEAVY_ASK_SEM = threading.BoundedSemaphore(HEAVY_ASK_LIMIT)
 
@@ -81,7 +83,8 @@ LEXION_WRAPPER = (
 )
 QUOTA_WORDS = ("429", "quota", "limit exceeded", "rate limit", "resource exhausted",
                "resource_exhausted", "ratelimit",
-               "chatresponseparseerror", "ended before response")  # limitdagi akkauntda android oqimi uzilib qoladi — boshqa akkauntga  # RateLimitError: Android RPC ... RESOURCE_EXHAUSTED
+               "chatresponseparseerror", "ended before response",
+               "notebooklm javob bermadi")   # osilib qolgan oqim (ASK_TIMEOUT_SEC) ham boshqa akkauntga  # limitdagi akkauntda android oqimi uzilib qoladi — boshqa akkauntga  # RateLimitError: Android RPC ... RESOURCE_EXHAUSTED
 
 NLM = shutil.which("notebooklm") or "notebooklm"
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -247,7 +250,10 @@ def with_retry(fn, retries: Optional[int] = None):
         except AuthError:
             raise
         except NlmError as e:
-            transient = any(w in str(e).lower() for w in TRANSIENT_WORDS)
+            low = str(e).lower()
+            if len(ACCOUNTS) > 1 and any(w in low for w in QUOTA_WORDS):
+                raise   # shu akkauntda qayta urinmaymiz — ish darhol boshqa akkauntga o'tadi
+            transient = any(w in low for w in TRANSIENT_WORDS)
             if not transient or attempt == n:
                 raise
             time.sleep(delay)
@@ -546,7 +552,7 @@ def run_job(job: dict, acc: dict) -> dict:
             raw = with_retry(lambda: nlm(p, "ask", "--notebook", nid, prompt, timeout=420))
         else:
             ask_args = ["ask", "--notebook", nid] + (["--new", "--yes"] if RAW_MODE else []) + [prompt]
-            ask = lambda: nlm(p, *ask_args, timeout=420, backend=ASK_BACKEND or None)
+            ask = lambda: nlm(p, *ask_args, timeout=ASK_TIMEOUT_SEC, backend=ASK_BACKEND or None)
             # tartib muhim: avval akkaunt qulfi, keyin umumiy semafor (boshqa akkaunt ishi bekorga bloklanmasin)
             with UMUMIY_LOCKS[p]:   # umumiy chat: bir akkauntda bir vaqtda bitta savol
                 step(f"savol navbatda (umumiy daftar, backend={ASK_BACKEND or 'web'})")
