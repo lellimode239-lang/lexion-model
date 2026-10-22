@@ -84,7 +84,18 @@ QUOTA_WORDS = ("429", "quota", "limit exceeded", "rate limit", "resource exhaust
 
 NLM = shutil.which("notebooklm") or "notebooklm"
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-UMUMIY_IDS = {a["umumiy"] for a in ACCOUNTS}
+# NLM_UMUMIY_RU -> ruscha savollar uchun ruscha katalog daftari (barcha akkauntlarga ulashilgan bitta ID); bo'sh = o'chiq
+UMUMIY_RU = os.environ.get("NLM_UMUMIY_RU", "").strip()
+UMUMIY_IDS = {a["umumiy"] for a in ACCOUNTS} | ({UMUMIY_RU} if UMUMIY_RU else set())
+UZ_CYR_RE = re.compile(r"[ўқғҳЎҚҒҲ]")
+RU_MARK_RE = re.compile(r"[ыщъЫЩЪ]|(?<![а-яё])(что|как|если|это|меня|мне|можно|нужно|ли|при|был|была|который|после|не|и|в|у|по|за|от|я|он|она|мы|они|его|её|их|мой|моя)(?![а-яё])|[а-яё](ть|ться|ся)(?![а-яё])", re.I)
+
+
+def is_russian(text: str) -> bool:
+    """Ruscha savol: kirill harflar ustun, o'zbek kirill harflari (ў қ ғ ҳ) yo'q va ruscha belgi/so'z bor."""
+    letters = [c for c in text if c.isalpha()]
+    cyr = sum("\u0400" <= c <= "\u04ff" for c in letters)
+    return bool(letters) and cyr / len(letters) > 0.5 and not UZ_CYR_RE.search(text) and bool(RU_MARK_RE.search(text))
 
 DEFAULT_PROMPT = (
     "Siz professional O'zbekiston huquqshunosisiz. "
@@ -516,7 +527,9 @@ def run_job(job: dict, acc: dict) -> dict:
             wait_sources_ready(p, nid, max_wait=120 + 15 * len(to_add))
             step("manbalar tayyor")
         else:
-            step("manba yo'q, umumiy daftardan javob olinadi")
+            if UMUMIY_RU and is_russian(req.kazus_text):
+                nid = UMUMIY_RU
+            step(f"manba yo'q, umumiy daftardan javob olinadi ({'ruscha' if nid == UMUMIY_RU else 'o`zbekcha'})")
 
         prompt = build_prompt(req)
         if custom:
