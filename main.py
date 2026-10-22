@@ -535,7 +535,7 @@ def run_job(job: dict, acc: dict) -> dict:
             wait_sources_ready(p, nid, max_wait=120 + 15 * len(to_add))
             step("manbalar tayyor")
         else:
-            if UMUMIY_RU and is_russian(req.kazus_text):
+            if UMUMIY_RU and is_russian(req.kazus_text.split("Yangi savol:", 1)[-1]):   # suhbat davomida oldingi mavzu prefiksi o'zbekcha
                 nid = UMUMIY_RU
             step(f"manba yo'q, umumiy daftardan javob olinadi ({'ruscha' if nid == UMUMIY_RU else 'o`zbekcha'})")
 
