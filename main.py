@@ -92,6 +92,7 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 UMUMIY_RU = os.environ.get("NLM_UMUMIY_RU", "").strip()
 UMUMIY_IDS = {a["umumiy"] for a in ACCOUNTS} | ({UMUMIY_RU} if UMUMIY_RU else set())
 # Ruscha savolni aniqlash: shubha bo'lsa — O'ZBEKCHA (o'zbekcha javob sifati hech qachon o'zgarmasin)
+RU_DOC_ID_RE = re.compile(r'"(-?\d{4,9})"')   # ruscha daftar javobi: ["6257291","111457",...]
 UZ_CYR_RE = re.compile(r"[ўқғҳЎҚҒҲ]")
 _W = r"(?<![а-яёa-z])(?:%s)(?![а-яёa-z])"
 RU_WORDS_RE = re.compile(_W % "что|как|если|это|меня|мне|можно|нужно|ли|не|и|в|на|с|по|за|от|я|он|она|мы|они|его|её|их|мой|моя|мою|был|была|были|при|после|который|которая|для|без|или|но|уже|чтобы|когда|почему|какой|какие|сколько|где|есть|нет|может|должен|ребенок|ребёнок|работодатель|договор|закон|статья|суд", re.I)
@@ -661,6 +662,13 @@ def run_job(job: dict, acc: dict) -> dict:
                                 raise
                             step(f"ruscha daftar xato berdi: {str(e)[:120]}")
                             raw = ""
+                        if not LEX_URL_RE.search(raw or ""):
+                            # Google ruscha daftar javobidagi havolalarni "[suspicious link removed]" qiladi:
+                            # daftar hujjat raqamlarini qaytaradi, havolani shu yerda yasaymiz
+                            ids = list(dict.fromkeys(RU_DOC_ID_RE.findall(raw or "")))[:MAX_LEX_URLS]
+                            if ids:
+                                raw = json.dumps([f"https://lex.uz/docs/{i}" for i in ids])
+                                step(f"ruscha daftar {len(ids)} ta hujjat raqami qaytardi")
                         if not LEX_URL_RE.search(raw or ""):
                             nid = acc["umumiy"]
                             step("ruscha daftar havola bermadi, o'zbekcha daftardan olinmoqda")
