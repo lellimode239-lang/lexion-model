@@ -83,6 +83,7 @@ QUOTA_WORDS = ("429", "quota", "limit exceeded", "rate limit", "resource exhaust
                "resource_exhausted", "ratelimit",                      # RateLimitError: Android RPC ... RESOURCE_EXHAUSTED
                "chatresponseparseerror", "ended before response",      # Google javob oqimini uzib qo'ydi
                "notebooklm javob bermadi")                             # osilib qolgan savol (ASK_TIMEOUT_SEC)
+RETRY_SAME_WORDS = ("chatresponseparseerror", "ended before response")
 # Google ba'zan javob oqimini uzib, savolni ~3 daqiqa osiltiradi; normal javob 20-70 s — undan keyin boshqa akkauntga
 ASK_TIMEOUT_SEC = int(os.environ.get("LEXION_ASK_TIMEOUT", "150"))
 
@@ -331,7 +332,16 @@ def ask_umumiy(p: str, nid: str, prompt: str) -> str:
                 if cid:
                     await c.chat.delete_conversation(nid, cid)
             return await c.chat.ask(nid, prompt)
-        return api(p, fresh_ask, backend=ASK_BACKEND or None, timeout=ASK_TIMEOUT_SEC).answer
+        try:
+            return api(p, fresh_ask, backend=ASK_BACKEND or None, timeout=ASK_TIMEOUT_SEC).answer
+        except NlmError as e:
+            # Google birinchi urinishda javob oqimini uzib qo'yadi, brauzerdagi "Qayta urinish" kabi
+            # shu akkauntda darhol yana bir marta so'raymiz; yana uzilsa — boshqa akkauntga (QUOTA_WORDS)
+            if not any(w in str(e).lower() for w in RETRY_SAME_WORDS):
+                raise
+            print(f"[retry] {p}: oqim uzildi, shu akkauntda qayta so'ralmoqda", flush=True)
+            time.sleep(2)
+            return api(p, fresh_ask, backend=ASK_BACKEND or None, timeout=ASK_TIMEOUT_SEC).answer
     ask_args = ["ask", "--notebook", nid] + (["--new", "--yes"] if RAW_MODE else []) + [prompt]
     return nlm(p, *ask_args, timeout=ASK_TIMEOUT_SEC, backend=ASK_BACKEND or None)
 
